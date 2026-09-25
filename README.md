@@ -2,9 +2,13 @@
 
 Sean Ryan · Fall 2026
 
-## Assignment 2: Connectivity and Centrality
+## Quick links
 
-[Open the HTML report](https://StrokeOfLuck.github.io/DSA295-FA26/DSA295_003_FA26_A2_sryan3.html)
+- **[Open the clickable report](https://strokeofluck.github.io/DSA295-FA26/DSA295_003_FA26_A2_sryan3.html)** — read the rendered Assignment 2 report in your browser.
+- **[GitHub repository](https://github.com/StrokeOfLuck/DSA295-FA26)** — browse the source files and version history.
+- **[Download page](https://strokeofluck.github.io/DSA295-FA26/)** — download the submission HTML, R Markdown, and network data.
+
+## Assignment 2: Connectivity and Centrality
 
 - [R Markdown source](DSA295_003_FA26_A2_sryan3.Rmd)
 - [HTML submission file](DSA295_003_FA26_A2_sryan3.html)
