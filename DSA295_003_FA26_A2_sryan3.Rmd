@@ -1,0 +1,413 @@
+---
+title: "Assignment 2: Connectivity and Centrality"
+author: "Sean Ryan"
+date: "September 24, 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+    self_contained: true
+---
+
+<!-- Keep drugnet.rda beside this file. Open in RStudio and Knit to HTML.
+If needed, run install.packages(c("igraph", "ggraph", "knitr", "rmarkdown"))
+in the console once. Review the analysis convention and ethnicity code key
+before submission. No ethnicity names have been guessed. -->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                     fig.align = "center", fig.width = 10, fig.height = 8,
+                     dpi = 150)
+```
+
+This report examines connectivity and centrality in the drugnet network. As in Assignment 1, each section explains the concept, shows the code and results, and interprets what those results tell us. Assignment 1 described patterns visible in a sociogram. This assignment goes further by calculating measures of reachability, structural vulnerability, and actors' positions in the network.
+
+The main course references are [Connectivity](https://stevemcd1.github.io/introSNA/connectivity.html), [Centrality](https://stevemcd1.github.io/introSNA/centrality.html), and [Visualizing Networks](https://stevemcd1.github.io/introSNA/network_viz.html). Every network visualization below uses **ggraph**.
+
+**Analysis convention.** The supplied graph is directed. I show that original graph first, identify its largest **weakly connected component**, and then analyze a simple undirected version of that component. A relationship counts once if either actor reported it. This measures underlying social connectedness and makes the main analysis comparable to the textbook's undirected examples. It does **not** establish that communication or drug distribution can flow in both directions. The appendix preserves direction and shows why this choice matters. Unless explicitly labeled otherwise, results in Sections 3–9 refer to the undirected main component.
+
+**Ethnicity labels.** The data contain ethnicity codes 1–4. The available package documentation does not map these codes to group names, so the report retains the original codes. The group names need to be checked against the course codebook before submission.
+
+## 1. Load the drugnet graph and visualize the full network
+
+The instructor's [intronets data documentation](https://github.com/stevemcd1/intronets#drug-user-social-networks) identifies this as a social network of drug users. A node represents an individual and a directed edge represents a reported social connection. These ties are not direct evidence of a particular drug transaction.
+
+An `.rda` file stores R objects. Unlike the CSV files in Assignment 1, this file already contains a graph, so I load it directly. The file also includes `drug_connect`, but I extract the main component myself below to demonstrate the required procedure.
+
+```{r load-data}
+library(igraph)
+library(ggraph)
+library(knitr)
+
+load("drugnet.rda")
+drugnet <- upgrade_graph(drugnet)
+drugnet
+
+kable(data.frame(
+  Nodes = vcount(drugnet), Directed_edges = ecount(drugnet),
+  Directed = is_directed(drugnet), Weighted = is_weighted(drugnet),
+  Self_loops = sum(which_loop(drugnet))
+), caption = "Structure of the original graph")
+```
+
+The full graph has **`r vcount(drugnet)` actors and `r ecount(drugnet)` directed edges**. Actor identifiers such as X1 are retained throughout; extracting a subgraph does not change these identifiers.
+
+```{r full-network}
+set.seed(295)
+ggraph(drugnet, layout = "stress") +
+  geom_edge_link(colour = "grey65", alpha = 0.55,
+                 arrow = grid::arrow(length = grid::unit(1.4, "mm")),
+                 end_cap = circle(1.5, "mm")) +
+  geom_node_point(colour = "#0072B2", size = 2) +
+  labs(title = "Drugnet: full directed network",
+       subtitle = "293 actors; arrows indicate the direction of reported ties") +
+  theme_graph(base_family = "sans")
+```
+
+The layout separates disconnected actors and small groups from the main network. Node position is a display choice, not a geographic location or a centrality score. This follows the distinction between visual encodings and network structure in [Visualizing Networks](https://stevemcd1.github.io/introSNA/network_viz.html) and [Graph Layouts](https://stevemcd1.github.io/introSNA/graph_layouts.html). Exact component counts require calculation rather than just visual inspection.
+
+## 2. Identify components and extract the main component
+
+A **weak component** is a group connected by paths when arrow direction is ignored. A **strong component** instead requires directed paths in both directions between every pair of actors. I use weak components to identify the underlying connected social group, then state explicitly when direction is removed. See [Connected graphs and components](https://stevemcd1.github.io/introSNA/connectivity.html#connected-graphs-and-components).
+
+```{r components}
+comps <- components(drugnet, mode = "weak")
+component_sizes <- as.data.frame(table(comps$csize))
+names(component_sizes) <- c("Actors_per_component", "Number_of_components")
+kable(component_sizes, caption = "Weak-component size distribution")
+
+largest <- which.max(comps$csize)
+main_directed <- induced_subgraph(
+  drugnet, which(comps$membership == largest)
+)
+
+# Collapse reciprocal nominations into one undirected relationship.
+main <- simplify(as_undirected(main_directed, mode = "collapse"),
+                 remove.multiple = TRUE, remove.loops = TRUE)
+stopifnot(is_connected(main), is_simple(main), !is_directed(main))
+
+kable(data.frame(
+  Graph = c("Full directed network", "Main directed component",
+            "Main undirected component"),
+  Actors = c(vcount(drugnet), vcount(main_directed), vcount(main)),
+  Edges = c(ecount(drugnet), ecount(main_directed), ecount(main))
+))
+```
+
+There are **`r comps$no` weak components**, including **`r sum(comps$csize == 1)` single-actor components**. The main component contains **`r vcount(main)` actors**, or **`r round(100*vcount(main)/vcount(drugnet),1)`%** of the full network. The remaining `r vcount(drugnet)-vcount(main)` actors are outside this component and are excluded from the primary centrality comparison. Collapsing arrow direction leaves `r ecount(main)` distinct relationships in the main component.
+
+```{r main-network}
+set.seed(295)
+main_layout <- create_layout(main, layout = "stress")
+ggraph(main_layout) +
+  geom_edge_link(colour = "grey70", alpha = 0.7) +
+  geom_node_point(colour = "#0072B2", size = 2.5) +
+  labs(title = "Drugnet: main component",
+       subtitle = "Undirected relationships; the same node positions are reused below") +
+  theme_graph(base_family = "sans")
+```
+
+Reusing these coordinates in later figures makes changes in color and size easier to compare. The main component is connected by construction; this is stronger evidence than judging connectivity from a dense picture.
+
+## 3. Diameter: how far apart are the most distant actors?
+
+The **geodesic distance** is the number of edges along a shortest path. The **diameter** is the largest of these shortest-path distances, not the length of the longest possible winding route. See [Network distance summaries](https://stevemcd1.github.io/introSNA/connectivity.html#network-distance-summaries).
+
+```{r diameter}
+distance_matrix <- distances(main, weights = NA)
+network_diameter <- diameter(main, directed = FALSE, weights = NA,
+                             unconnected = FALSE)
+diameter_pair <- farthest_vertices(main, directed = FALSE, weights = NA)
+pair_names <- V(main)$name[as.integer(diameter_pair$vertices)]
+kable(data.frame(Diameter = network_diameter,
+                 Actor_1 = pair_names[1], Actor_2 = pair_names[2]))
+stopifnot(network_diameter == max(distance_matrix))
+```
+
+The main component has a diameter of **`r network_diameter` edges**. Every actor can reach every other actor in at most this many steps when direction is ignored. One pair at this distance is **`r pair_names[1]` and `r pair_names[2]`**. Other pairs may also realize the diameter.
+
+This number applies to the main component. The full network is disconnected, so some pairs have no path at all; a finite diameter computed after excluding unreachable pairs would not describe reachability across all 293 actors.
+
+## 4. Eccentricity: which actor is closest to the farthest actor?
+
+An actor's **eccentricity** is its greatest shortest-path distance to any other actor. An actor with the lowest eccentricity minimizes that worst-case distance. This differs from minimizing the average distance, which is the idea behind closeness centrality. See [Node distance summaries](https://stevemcd1.github.io/introSNA/connectivity.html#node-distance-summaries).
+
+```{r eccentricity}
+ecc <- eccentricity(main, mode = "all")
+centers <- data.frame(Actor = V(main)$name[ecc == min(ecc)],
+                      Eccentricity = min(ecc))
+kable(centers, caption = "All actors tied for the lowest eccentricity")
+stopifnot(all(ecc == apply(distance_matrix, 1, max)))
+```
+
+**`r centers$Actor[1]`** is an actor with the lowest eccentricity, **`r min(ecc)`**. Starting from this actor, even the farthest actor in the component is only `r min(ecc)` steps away along a shortest undirected path. The table reports every actor attaining the minimum. In this graph, X83 is the only actor with eccentricity 9, so it is the unique center under this criterion. That does not imply it ranks first on every other centrality measure.
+
+## 5. Cutset and bridge set
+
+Following the textbook's terminology, the **cutset** below is the set of individual **cutpoints** or articulation points: removing any one of these actors and its incident edges increases the number of components. A **bridge** is an edge whose removal alone disconnects the component. This is not a claim that the whole list is one minimum multi-vertex cut. See [Cutpoints and Bridges](https://stevemcd1.github.io/introSNA/connectivity.html#cutpoints-and-bridges).
+
+```{r cuts-and-bridges}
+cutset <- articulation_points(main)
+bridgeset <- bridges(main)
+cut_table <- data.frame(Actor = sort(as_ids(cutset)))
+bridge_table <- as.data.frame(ends(main, bridgeset, names = TRUE))
+names(bridge_table) <- c("Actor_1", "Actor_2")
+kable(cut_table, caption = "Cutset: individual articulation points")
+kable(bridge_table, caption = "Bridge set: individual critical relationships")
+
+V(main)$Cutpoint <- seq_len(vcount(main)) %in% as.integer(cutset)
+E(main)$Bridge <- seq_len(ecount(main)) %in% as.integer(bridgeset)
+```
+
+There are **`r length(cutset)` cutpoints** and **`r length(bridgeset)` bridges**. Each is identified by an actor ID or pair of actor IDs above. A bridge can separate a single peripheral actor as well as a larger group; its presence alone does not establish the scale of its effect.
+
+```{r vulnerability-graph}
+ggraph(main, layout = "manual", x = main_layout$x, y = main_layout$y) +
+  geom_edge_link(aes(edge_colour = Bridge, edge_width = Bridge), alpha = 0.8) +
+  scale_edge_colour_manual(values = c("FALSE" = "grey80", "TRUE" = "#D55E00"),
+                           labels = c("Other relationship", "Bridge")) +
+  scale_edge_width_manual(values = c("FALSE" = 0.4, "TRUE" = 1.1), guide = "none") +
+  geom_node_point(aes(colour = Cutpoint, shape = Cutpoint), size = 2.7) +
+  scale_colour_manual(values = c("FALSE" = "#0072B2", "TRUE" = "#D55E00"),
+                      labels = c("Other actor", "Cutpoint")) +
+  scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 17),
+                     labels = c("Other actor", "Cutpoint")) +
+  labs(title = "Structural vulnerabilities in the main component",
+       subtitle = "Triangles mark cutpoints; thicker orange edges mark bridges") +
+  theme_graph(base_family = "sans") + theme(legend.position = "bottom")
+```
+
+In a drug-distribution network, such positions could indicate dependence on particular intermediaries or relationships for maintaining connections between groups. They can also matter for public-health outreach: losing an intermediary could interrupt access to a group. These are structural possibilities, not proof that an actor controls distribution. Here the recorded ties are social connections, and the analysis describes a static network; it does not establish what would happen if people formed new ties after a removal.
+
+## 6. Four kinds of centrality and the ten most central actors
+
+The [Centrality chapter](https://stevemcd1.github.io/introSNA/centrality.html) distinguishes ways an actor can occupy a prominent network position. The four measures answer different questions:
+
+| Measure | What it measures here | What a high value suggests |
+|:--|:--|:--|
+| Degree | Number of distinct direct neighbors | Many immediate social contacts |
+| Closeness | Inverse average shortest-path distance to all other actors | Short routes to the rest of the component |
+| Betweenness | Share of other-actor pairs' shortest paths passing through the actor, allocating fractional credit when paths tie | Potential brokerage between others |
+| Eigenvector | A score proportional to the sum of neighboring actors' scores | Connections to other well-connected actors |
+
+Eigenvector centrality is based on adjacency, rather than averaging shortest-path distances. A person can have many neighbors but relatively low betweenness if those neighbors can easily reach one another without passing through that person.
+
+```{r centrality-scores}
+centrality <- data.frame(
+  Actor = V(main)$name,
+  Ethnicity_code = V(main)$ethnicity,
+  Degree = degree(main, loops = FALSE),
+  Closeness = closeness(main, normalized = TRUE, weights = NA),
+  Betweenness = betweenness(main, directed = FALSE, normalized = TRUE, weights = NA),
+  Eigenvector = eigen_centrality(main, directed = FALSE, weights = NA)$vector
+)
+stopifnot(all(is.finite(as.matrix(centrality[,3:6]))))
+
+# Equal scores get equal ranks. Actor number breaks display-order ties only.
+top_ten <- function(metric) {
+  order_id <- order(-centrality[[metric]],
+                    as.integer(sub("X", "", centrality$Actor)))
+  out <- centrality[head(order_id, 10), c("Actor", "Ethnicity_code", metric)]
+  out$Rank <- rank(-centrality[[metric]], ties.method = "min")[head(order_id,10)]
+  out[, c("Rank", "Actor", "Ethnicity_code", metric)]
+}
+```
+
+Closeness uses `normalized = TRUE`, giving the inverse **average** distance rather than the inverse sum. Betweenness divides by the number of unordered pairs among the other `r vcount(main)-1` actors. Eigenvector scores are scaled so that the maximum is 1. Degree remains a count. The scales should not be compared directly across columns. Rankings use unrounded values; each table shows exactly ten actors, with tied ranks retained and actor number used to select among ties at the cutoff.
+
+### Degree: immediate contacts
+
+```{r top-degree}
+kable(top_ten("Degree"), row.names = FALSE, caption = "Ten highest degree scores")
+```
+
+The leading degree actor in display order is **`r top_ten("Degree")$Actor[1]`**, with **`r max(centrality$Degree)` distinct neighbors**. This describes direct contact opportunities, not the number of actors that can be reached through intermediaries. See [Degree Centrality](https://stevemcd1.github.io/introSNA/centrality.html#degree-centrality).
+
+### Closeness: short paths to everyone else
+
+```{r top-closeness}
+kable(top_ten("Closeness"), digits = 6, row.names = FALSE,
+      caption = "Ten highest normalized closeness scores")
+```
+
+The leading actor is **`r top_ten("Closeness")$Actor[1]`**. Its closeness of `r round(max(centrality$Closeness),4)` corresponds to an average distance of **`r round(1/max(centrality$Closeness),2)` edges** to other actors. See [Closeness Centrality](https://stevemcd1.github.io/introSNA/centrality.html#closeness-centrality).
+
+### Betweenness: potential brokerage
+
+```{r top-betweenness}
+kable(top_ten("Betweenness"), digits = 6, row.names = FALSE,
+      caption = "Ten highest normalized betweenness scores")
+```
+
+The leading actor is **`r top_ten("Betweenness")$Actor[1]`**, with a normalized score of **`r round(max(centrality$Betweenness),4)`**. This measures its share of potential shortest-path brokerage, allowing for multiple equally short paths. It does not mean that the same percentage of actual transactions passes through this actor. See [Betweenness Centrality](https://stevemcd1.github.io/introSNA/centrality.html#betweenness-centrality).
+
+### Eigenvector: connections to well-connected actors
+
+```{r top-eigenvector}
+kable(top_ten("Eigenvector"), digits = 6, row.names = FALSE,
+      caption = "Ten highest eigenvector scores")
+```
+
+The leading actor is **`r top_ten("Eigenvector")$Actor[1]`**, assigned the maximum scaled score of 1. This score emphasizes the centrality of the actor's neighbors. Comparing the four tables shows why there need not be one universally most important actor: direct contacts, distance, brokerage, and central neighbors describe different advantages. See [Centrality extensions](https://stevemcd1.github.io/introSNA/centrality.html#centrality-extensions).
+
+## 7. Average centrality by ethnicity
+
+I choose **normalized betweenness** because the question concerns positions that might connect different parts of a drug-related social network. It directly measures potential brokerage, whereas degree would emphasize immediate contacts. A group average must be calculated per actor; adding scores would give larger groups an automatic advantage. The [Centrality chapter](https://stevemcd1.github.io/introSNA/centrality.html) provides the conceptual basis for distinguishing these mechanisms.
+
+```{r ethnicity-table}
+group_summary <- do.call(rbind, lapply(
+  split(centrality, centrality$Ethnicity_code), function(d) {
+    data.frame(Ethnicity_code = d$Ethnicity_code[1], Actors = nrow(d),
+               Mean_betweenness = mean(d$Betweenness),
+               Median_betweenness = median(d$Betweenness),
+               Maximum_betweenness = max(d$Betweenness))
+  }
+))
+group_summary <- group_summary[order(-group_summary$Mean_betweenness), ]
+kable(group_summary, digits = 6, row.names = FALSE,
+      caption = "Actor-level betweenness summarized within ethnicity codes")
+```
+
+**Ethnicity code `r group_summary$Ethnicity_code[1]` has the highest mean betweenness**, at **`r round(group_summary$Mean_betweenness[1],6)`**, followed by code **`r group_summary$Ethnicity_code[2]`**, at **`r round(group_summary$Mean_betweenness[2],6)`**. The table also reports each group's size, median, and maximum. Comparing the mean with the median helps assess whether a group average is driven by a small number of prominent actors.
+
+**The leading group, code 4, contains only two actors**, compared with 69 in code 2, 109 in code 3, and 13 in code 1. Its mean is therefore a description of two observed positions, not strong evidence about a larger ethnic population. Codes 2 and 3 contain the highest-scoring individual brokers even though code 4 has the highest group mean.
+
+This is a descriptive result for the actors in the main component. It does not imply that every member of the leading group is central or that ethnicity causes centrality. Group membership outside the main component is not represented in this comparison, and the numeric codes need a verified course key before they can be replaced with names.
+
+## 8. Visualize ethnicity and centrality together
+
+Following [Visualizing Networks](https://stevemcd1.github.io/introSNA/network_viz.html), color represents a categorical node attribute and size represents a numerical network measure. The node positions are identical to the earlier main-component graph so that the two encodings can be compared without changes in layout.
+
+```{r ethnicity-network}
+V(main)$Ethnicity <- factor(paste("Code", V(main)$ethnicity),
+                            levels = paste("Code", 1:4))
+V(main)$Betweenness <- centrality$Betweenness
+V(main)$Top_actor <- ifelse(V(main)$name %in% top_ten("Betweenness")$Actor,
+                            V(main)$name, "")
+ethnicity_colors <- c("Code 1" = "#0072B2", "Code 2" = "#E69F00",
+                      "Code 3" = "#009E73", "Code 4" = "#CC79A7")
+ggraph(main, layout = "manual", x = main_layout$x, y = main_layout$y) +
+  geom_edge_link(colour = "grey75", alpha = 0.65) +
+  geom_node_point(aes(colour = Ethnicity, size = Betweenness), alpha = 0.9) +
+  geom_node_text(aes(label = Top_actor), repel = TRUE, size = 3) +
+  scale_colour_manual(values = ethnicity_colors, drop = FALSE) +
+  scale_size_continuous(range = c(1.8, 10), name = "Betweenness") +
+  labs(title = "Ethnicity and brokerage in the main component",
+       subtitle = "Larger nodes have higher betweenness; ten leading actors are labeled",
+       caption = "Ethnicity codes retain the source coding; group names are unverified.") +
+  theme_graph(base_family = "sans") + theme(legend.position = "bottom")
+```
+
+The graph is consistent with the tabular results but does not make the group-average ordering obvious. The two pink code-4 nodes have moderate sizes, while code 2 (orange) and code 3 (green) contain both large brokers and many small peripheral nodes. Those mixtures explain how code 4 can have the largest mean without containing the largest individual node. Of the ten actors shown in the betweenness ranking, **`r sum(top_ten("Betweenness")$Ethnicity_code == group_summary$Ethnicity_code[1])` belong to the group with the highest mean**. Large nodes from other groups do not contradict a difference in group averages. The table is the stronger evidence for that comparison because the graph displays individual scores and does not directly encode an average. A small positive minimum point size keeps actors with zero betweenness visible.
+
+## 9. Network centralization and a colored path
+
+### Degree centralization
+
+**Centrality** describes individual actors. **Centralization** describes how unequal the graph's centrality scores are relative to a theoretical maximum. I use degree centralization to assess concentration of direct connections. This is a different question from the brokerage comparison above, so I name the measure explicitly. See [Centralization](https://stevemcd1.github.io/introSNA/centrality.html#centralization).
+
+```{r centralization}
+degree_centralization <- centr_degree(main, mode = "all", loops = FALSE,
+                                      normalized = TRUE)$centralization
+n <- vcount(main)
+manual_centralization <- sum(max(degree(main)) - degree(main)) / ((n-1)*(n-2))
+stopifnot(isTRUE(all.equal(degree_centralization, manual_centralization)))
+kable(data.frame(
+  Graph = c("Equal-degree ring", "Drugnet main component", "Undirected star"),
+  Degree_centralization = c(0, degree_centralization, 1)
+), digits = 4, caption = "Degree centralization and theoretical reference values")
+```
+
+The degree centralization is **`r round(degree_centralization,4)`**, or **`r round(100*degree_centralization,2)`% of the maximum degree inequality** for a simple undirected graph of this size. Zero means all actors have the same degree; one corresponds to a star, in which a single actor connects to everyone and all other actors have degree one. At roughly 6% of the star benchmark, this graph has relatively low degree centralization: direct connections are much less concentrated on one hub than in a star. This value quantifies proximity to those reference structures; it is not the percentage of ties owned by one actor and does not establish an organizational hierarchy. Other centralization metrics can produce different results.
+
+### A sequence of differently colored edges
+
+I select one shortest path between the pair of actors used to illustrate the diameter. Numbered legend entries and a path table make the order explicit. This follows [Visualizing paths](https://stevemcd1.github.io/introSNA/connectivity.html#visualizing-paths).
+
+```{r path-table}
+path_result <- shortest_paths(main, from = pair_names[1], to = pair_names[2],
+                              output = "both", weights = NA)
+path_vertices <- as.integer(path_result$vpath[[1]])
+path_edges <- as.integer(path_result$epath[[1]])
+path_names <- V(main)$name[path_vertices]
+path_table <- data.frame(Step = seq_along(path_edges),
+                         From = head(path_names, -1), To = tail(path_names, -1))
+kable(path_table, caption = "One shortest path realizing the diameter")
+stopifnot(length(path_edges) == network_diameter)
+
+E(main)$Path_step <- NA_integer_
+E(main)$Path_step[path_edges] <- seq_along(path_edges)
+V(main)$Path_label <- ifelse(seq_len(vcount(main)) %in% path_vertices,
+                            V(main)$name, "")
+```
+
+```{r path-graph}
+ggraph(main, layout = "manual", x = main_layout$x, y = main_layout$y) +
+  geom_edge_link(colour = "grey85", alpha = 0.55) +
+  geom_edge_link(aes(filter = !is.na(Path_step),
+                     edge_colour = factor(Path_step)), edge_width = 1.6) +
+  scale_edge_colour_manual(values = grDevices::hcl.colors(length(path_edges), "Dynamic"),
+                           name = "Path step") +
+  geom_node_point(colour = "grey50", size = 1.8) +
+  geom_node_label(aes(filter = Path_label != "", label = Path_label),
+                  repel = TRUE, size = 3, fill = "white") +
+  labs(title = paste("A shortest path from", pair_names[1], "to", pair_names[2]),
+       subtitle = paste(length(path_edges), "edges; colors follow the numbered path table")) +
+  theme_graph(base_family = "sans") + theme(legend.position = "right")
+```
+
+The path uses **`r length(path_edges)` edges and `r length(path_vertices)` actors**. Its length equals the diameter, providing a concrete example of the longest shortest-path distance. The colored route is one possible geodesic, not evidence of an observed sequence of transactions. Because this is the undirected analysis, it does not require the original arrows to align with the displayed traversal.
+
+## Appendix: what changes when direction is retained?
+
+The [Connectivity chapter](https://stevemcd1.github.io/introSNA/connectivity.html#paths-and-distances) explains that arrow direction can change reachability. A weakly connected graph need not be strongly connected. The following check uses the original directed main component.
+
+```{r directed-check}
+strong <- components(main_directed, mode = "strong")
+directed_distances <- distances(main_directed, mode = "out", weights = NA)
+off_diagonal <- row(directed_distances) != col(directed_distances)
+reachable <- is.finite(directed_distances[off_diagonal])
+kable(data.frame(
+  Strong_components = strong$no,
+  Largest_strong_component = max(strong$csize),
+  Reachable_ordered_pairs = sum(reachable),
+  All_ordered_pairs = length(reachable),
+  Reachable_fraction = mean(reachable),
+  Longest_finite_directed_distance = max(directed_distances[is.finite(directed_distances)])
+), digits = 4)
+
+directed_scores <- data.frame(
+  Actor = V(main_directed)$name,
+  Indegree = degree(main_directed, mode = "in"),
+  Outdegree = degree(main_directed, mode = "out"),
+  Directed_betweenness = betweenness(main_directed, directed = TRUE,
+                                    normalized = TRUE, weights = NA)
+)
+kable(head(directed_scores[order(-directed_scores$Directed_betweenness), ],10),
+      digits = 6, row.names = FALSE, caption = "Directed betweenness sensitivity check")
+```
+
+Only **`r round(100*mean(reachable),1)`% of ordered actor pairs** are reachable while following arrows. Consequently, the directed graph's longest **finite** distance is not a statement that all actor pairs can reach one another. Indegree counts incoming nominations; outdegree counts outgoing nominations. Direction-sensitive rankings answer a different question from the undirected rankings in the main report. If the assignment is intended to require directed-flow measures throughout, those conventions should replace the stated undirected approach rather than mixing defaults across functions.
+
+## Course chapters and data referenced
+
+* [Introduction to Social Network Analysis](https://stevemcd1.github.io/introSNA/)
+* [Visualizing Networks](https://stevemcd1.github.io/introSNA/network_viz.html)
+* [Graph Layouts](https://stevemcd1.github.io/introSNA/graph_layouts.html)
+* [Connectivity](https://stevemcd1.github.io/introSNA/connectivity.html)
+* [Centrality](https://stevemcd1.github.io/introSNA/centrality.html)
+* [Instructor's intronets data documentation](https://github.com/stevemcd1/intronets#drug-user-social-networks)
+* [Source drugnet.rda file](https://github.com/stevemcd1/intronets/blob/master/inst/extdata/drugnet.rda), downloaded September 24, 2026.
+
+## AI Use Disclosure
+
+ChatGPT assisted with locating the instructor's public data, drafting the R code and explanations, and checking the calculated results. Student review is still needed before submission, especially confirmation of the ethnicity code labels and the choice to analyze undirected relationships.
+
+## Reproducibility
+
+The dataset is included beside the `.Rmd` so knitting does not depend on a changing online file. The information below records the R and package versions used to generate this report.
+
+```{r session-info}
+sessionInfo()
+```
