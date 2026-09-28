@@ -1,10 +1,11 @@
-name: Render Assignment 2 HTML
+name: Render DSA 295 HTML
 
 on:
   push:
     branches: [main]
     paths:
       - "DSA295_003_FA26_A2_sryan3.Rmd"
+      - "community-detection.Rmd"
       - ".github/workflows/render-a2.yml"
   workflow_dispatch:
 
@@ -21,18 +22,20 @@ jobs:
       - name: Install R packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y r-cran-igraph r-cran-ggraph r-cran-knitr r-cran-rmarkdown
+          sudo apt-get install -y r-cran-igraph r-cran-ggraph r-cran-ggforce r-cran-knitr r-cran-rmarkdown
       - name: Render HTML
-        run: Rscript -e 'rmarkdown::render("DSA295_003_FA26_A2_sryan3.Rmd", output_file="DSA295_003_FA26_A2_sryan3.html")'
+        run: |
+          Rscript -e 'rmarkdown::render("DSA295_003_FA26_A2_sryan3.Rmd", output_file="DSA295_003_FA26_A2_sryan3.html")'
+          Rscript -e 'rmarkdown::render("community-detection.Rmd", output_file="community-detection.html")'
       - name: Commit rendered HTML
         run: |
-          if git diff --quiet -- DSA295_003_FA26_A2_sryan3.html; then
+          if git diff --quiet -- DSA295_003_FA26_A2_sryan3.html community-detection.html; then
             echo "No HTML changes."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add DSA295_003_FA26_A2_sryan3.html
-          git commit -m "Render updated Assignment 2 HTML"
+          git add DSA295_003_FA26_A2_sryan3.html community-detection.html
+          git commit -m "Render updated DSA 295 HTML"
           git pull --rebase
           git push
