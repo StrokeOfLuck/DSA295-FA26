@@ -25,7 +25,7 @@ This report examines connectivity and centrality in the drugnet network. As in A
 
 The main course references are [Connectivity](https://stevemcd1.github.io/introSNA/connectivity.html), [Centrality](https://stevemcd1.github.io/introSNA/centrality.html), and [Visualizing Networks](https://stevemcd1.github.io/introSNA/network_viz.html). Every network visualization below uses **ggraph**.
 
-**Analysis convention.** The supplied graph is directed. I show that original graph first, identify its largest **weakly connected component**, and then analyze a simple undirected version of that component. A relationship counts once if either actor reported it. This measures underlying social connectedness and makes the main analysis comparable to the textbook's undirected examples. It does **not** establish that communication or drug distribution can flow in both directions. The appendix preserves direction and shows why this choice matters. Unless explicitly labeled otherwise, results in Sections 3–9 refer to the undirected main component.
+**Analysis convention.** The supplied graph is directed, so the opening visualization preserves its arrows. The revised assignment instructions specifically require the centrality analysis to **treat the network as undirected**. I therefore identify the largest weakly connected component and analyze a simple undirected version of that component for the required measures. A relationship counts once if either actor reported it. This does **not** mean that communication or drug distribution is assumed to flow in both directions; it is the analysis convention required for the assignment. The appendix preserves direction as a sensitivity check. Unless explicitly labeled otherwise, results in Sections 3–9 refer to the undirected main component.
 
 **Ethnicity labels.** The data contain ethnicity codes 1–4. The available package documentation does not map these codes to group names, so the report retains the original codes. The group names need to be checked against the course codebook before submission.
 
@@ -182,7 +182,7 @@ In a drug-distribution network, such positions could indicate dependence on part
 
 ## 6. Four kinds of centrality and the ten most central actors
 
-The [Centrality chapter](https://stevemcd1.github.io/introSNA/centrality.html) distinguishes ways an actor can occupy a prominent network position. The four measures answer different questions:
+Per the revised assignment instructions, all four centrality measures in this section treat the network as **undirected**: degree and closeness use `mode = "all"`, while betweenness and eigenvector use `directed = FALSE`. The [Centrality chapter](https://stevemcd1.github.io/introSNA/centrality.html) distinguishes ways an actor can occupy a prominent network position. The four measures answer different questions:
 
 | Measure | What it measures here | What a high value suggests |
 |:--|:--|:--|
@@ -197,8 +197,8 @@ Eigenvector centrality is based on adjacency, rather than averaging shortest-pat
 centrality <- data.frame(
   Actor = V(main)$name,
   Ethnicity_code = V(main)$ethnicity,
-  Degree = degree(main, loops = FALSE),
-  Closeness = closeness(main, normalized = TRUE, weights = NA),
+  Degree = degree(main, mode = "all", loops = FALSE),
+  Closeness = closeness(main, mode = "all", normalized = TRUE, weights = NA),
   Betweenness = betweenness(main, directed = FALSE, normalized = TRUE, weights = NA),
   Eigenvector = eigen_centrality(main, directed = FALSE, weights = NA)$vector
 )
@@ -402,7 +402,7 @@ Only **`r round(100*mean(reachable),1)`% of ordered actor pairs** are reachable 
 
 ## AI Use Disclosure
 
-ChatGPT assisted with locating the instructor's public data, drafting the R code and explanations, and checking the calculated results. Student review is still needed before submission, especially confirmation of the ethnicity code labels and the choice to analyze undirected relationships.
+ChatGPT assisted with locating the instructor's public data, drafting the R code and explanations, and checking the calculated results. Student review is still needed before submission, especially confirmation of the ethnicity code labels. The centrality section follows the revised assignment instruction to treat the network as undirected.
 
 ## Reproducibility
 
