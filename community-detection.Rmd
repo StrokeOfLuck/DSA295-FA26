@@ -1,0 +1,270 @@
+---
+title: "Exploring Louvain Communities in Drugnet"
+author: "Sean Ryan"
+date: "September 28, 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.align = "center", fig.width = 11, fig.height = 8,
+  dpi = 150
+)
+```
+
+This is a **separate exploratory page**, not part of the Assignment 2 submission. It uses the same Drugnet data and the same undirected main-component convention as the current report, then asks a new question:
+
+> Does the network naturally separate into communities when we optimize modularity?
+
+The **Louvain algorithm** starts with small groups and repeatedly moves actors between neighboring groups when doing so increases modularity. In plain language, modularity rewards a division where actors have more ties **inside their community** than we would expect from the network's overall pattern of connections.
+
+The shaded polygons below do **not** determine the communities. Louvain determines membership from the edges first; the polygons only make those memberships visible.
+
+## 1. Rebuild the same main component
+
+```{r load-data}
+library(igraph)
+library(ggraph)
+library(ggforce)
+library(knitr)
+
+load("drugnet.rda")
+drugnet <- upgrade_graph(drugnet)
+
+# Match the main Assignment 2 analysis:
+# 1. Find the largest weakly connected component.
+# 2. Collapse direction into one simple undirected relationship.
+comps <- components(drugnet, mode = "weak")
+largest <- which.max(comps$csize)
+
+main_directed <- induced_subgraph(
+  drugnet,
+  which(comps$membership == largest)
+)
+
+main <- simplify(
+  as_undirected(main_directed, mode = "collapse"),
+  remove.multiple = TRUE,
+  remove.loops = TRUE
+)
+
+stopifnot(is_connected(main), is_simple(main), !is_directed(main))
+
+kable(
+  data.frame(
+    Actors = vcount(main),
+    Relationships = ecount(main)
+  ),
+  caption = "Network used for Louvain community detection"
+)
+```
+
+The analysis is therefore based on the same underlying social relationships used for the primary centrality calculations in Assignment 2.
+
+## 2. Detect Louvain communities
+
+```{r louvain}
+set.seed(295)
+louvain <- cluster_louvain(main)
+
+V(main)$Community <- factor(membership(louvain))
+
+community_summary <- data.frame(
+  Community = seq_along(sizes(louvain)),
+  Actors = as.integer(sizes(louvain))
+)
+
+community_summary <- community_summary[
+  order(-community_summary$Actors),
+]
+
+kable(
+  community_summary,
+  row.names = FALSE,
+  caption = "Louvain community sizes"
+)
+
+kable(
+  data.frame(
+    Communities = length(louvain),
+    Modularity = modularity(louvain)
+  ),
+  digits = 4,
+  caption = "Louvain result"
+)
+```
+
+Louvain identifies **`r length(louvain)` communities** in the main component. The resulting modularity is **`r round(modularity(louvain), 3)`**.
+
+A higher modularity means the observed grouping contains more within-community relationships than would be expected under the modularity null model. The number is useful for comparing alternative partitions of this same network; it is not a percentage of relationships that are "correct."
+
+## 3. Show the communities as polygons
+
+The node positions below use the same **stress layout** convention as the Assignment 2 report. Louvain does not use these x/y positions when finding communities.
+
+```{r community-polygons}
+set.seed(295)
+main_layout <- create_layout(main, layout = "stress")
+main_layout$Community <- V(main)$Community
+
+ggraph(main_layout) +
+  ggforce::geom_mark_hull(
+    aes(
+      x = x,
+      y = y,
+      group = Community,
+      fill = Community,
+      label = paste("Community", Community)
+    ),
+    alpha = 0.12,
+    colour = NA,
+    expand = grid::unit(3, "mm"),
+    label.fill = "white",
+    label.fontsize = 9,
+    show.legend = FALSE
+  ) +
+  geom_edge_link(
+    colour = "grey72",
+    alpha = 0.6,
+    width = 0.45
+  ) +
+  geom_node_point(
+    aes(colour = Community),
+    size = 2.6,
+    alpha = 0.95
+  ) +
+  labs(
+    title = "Louvain communities in the Drugnet main component",
+    subtitle = "Community membership is calculated from network ties; shaded hulls only visualize the result",
+    colour = "Community"
+  ) +
+  theme_graph(base_family = "sans") +
+  theme(legend.position = "bottom")
+```
+
+If the polygons line up with visibly dense clusters, that is the visual consequence of the same pattern Louvain is quantifying: relatively many ties inside a community and relatively fewer ties crossing between communities.
+
+## 4. Which actors connect the communities?
+
+A useful next step is to compare Louvain membership with **betweenness centrality**. An actor can have high betweenness when many shortest paths between other actors pass through that position. If a high-betweenness actor sits near the boundary between Louvain communities, the graph gives an intuitive picture of potential brokerage.
+
+```{r brokerage}
+bet <- betweenness(
+  main,
+  directed = FALSE,
+  normalized = TRUE,
+  weights = NA
+)
+
+V(main)$Betweenness <- bet
+
+top_n <- 10
+top_ids <- order(bet, decreasing = TRUE)[seq_len(top_n)]
+V(main)$TopBroker <- ifelse(
+  seq_len(vcount(main)) %in% top_ids,
+  V(main)$name,
+  ""
+)
+
+main_layout$Betweenness <- V(main)$Betweenness
+main_layout$TopBroker <- V(main)$TopBroker
+
+ggraph(main_layout) +
+  ggforce::geom_mark_hull(
+    aes(
+      x = x,
+      y = y,
+      group = Community,
+      fill = Community
+    ),
+    alpha = 0.10,
+    colour = NA,
+    expand = grid::unit(3, "mm"),
+    show.legend = FALSE
+  ) +
+  geom_edge_link(
+    colour = "grey78",
+    alpha = 0.55,
+    width = 0.4
+  ) +
+  geom_node_point(
+    aes(colour = Community, size = Betweenness),
+    alpha = 0.9
+  ) +
+  geom_node_label(
+    aes(filter = TopBroker != "", label = TopBroker),
+    repel = TRUE,
+    size = 3,
+    fill = "white",
+    label.size = 0.15
+  ) +
+  scale_size_continuous(
+    range = c(1.8, 10),
+    name = "Betweenness"
+  ) +
+  labs(
+    title = "Louvain communities and potential brokers",
+    subtitle = "Larger nodes have higher betweenness; the ten highest-betweenness actors are labeled",
+    colour = "Community"
+  ) +
+  theme_graph(base_family = "sans") +
+  theme(legend.position = "bottom")
+```
+
+This does **not** establish that a labeled actor actually controls drug distribution or information flow. The recorded edges are reported social relationships. The figure only compares two structural properties of the observed network: modularity-based community membership and shortest-path brokerage.
+
+## 5. Count relationships inside and between communities
+
+We can also inspect what Louvain is responding to directly in the edge data.
+
+```{r inside-between}
+edge_ends <- ends(main, E(main), names = FALSE)
+
+same_community <-
+  V(main)$Community[edge_ends[, 1]] ==
+  V(main)$Community[edge_ends[, 2]]
+
+relationship_summary <- data.frame(
+  Relationship_type = c(
+    "Within the same Louvain community",
+    "Between different Louvain communities"
+  ),
+  Relationships = c(
+    sum(same_community),
+    sum(!same_community)
+  )
+)
+
+relationship_summary$Percent <- round(
+  100 * relationship_summary$Relationships / ecount(main),
+  1
+)
+
+kable(
+  relationship_summary,
+  row.names = FALSE,
+  caption = "Observed relationships within and between Louvain communities"
+)
+```
+
+This table is the simplest data-level view of the pattern shown by the polygons: each edge is checked to see whether its two endpoints received the same Louvain community label.
+
+## Interpretation
+
+The useful idea here is not that Louvain discovers one objectively true set of social groups. Community detection depends on the network definition and the algorithm. Instead, Louvain provides a reproducible answer to:
+
+> **What grouping produces a relatively strong concentration of relationships within groups compared with the modularity null model?**
+
+That makes it useful alongside the Assignment 2 measures. Centrality describes **positions of individual actors**, while Louvain describes **larger structural groupings** in the network.
+
+## Reproducibility
+
+```{r session-info}
+sessionInfo()
+```
